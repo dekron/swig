@@ -1422,13 +1422,19 @@ String *JSEmitter::emitInputTypemap(Node *n, Parm *p, Wrapper *wrapper, String *
     }
   } else {
     Swig_warning(WARN_TYPEMAP_IN_UNDEF, input_file, line_number, "Unable to use type %s as a function argument.\n", SwigType_str(type, 0));
+    return NULL;
   }
 
   if (is_optional) {
     Printf(code, "}\n");
   }
 
-  Append(wrapper->code, code);
+  // numinputs=0 typemaps are emitted by the legacy code in
+  // emit_attach_parmmaps() in emit.cxx, check the comment there
+  // All generators work around this
+  if (!checkAttribute(p, "tmap:in:numinputs", "0")) {
+    Append(wrapper->code, code);
+  }
   return code;
 }
 
@@ -1720,10 +1726,7 @@ void JSCEmitter::marshalInputArgs(Node *n, ParmList *parms, Wrapper *wrapper, Ma
       Exit(EXIT_FAILURE);
     }
 
-    // numinputs=0 typemaps are emitted by the legacy code in
-    // emit_attach_parmmaps() in emit.cxx, check the comment there
-    if (!checkAttribute(p, "tmap:in:numinputs", "0"))
-      tm = emitInputTypemap(n, p, wrapper, arg);
+    tm = emitInputTypemap(n, p, wrapper, arg);
     Delete(arg);
 
     if (tm) {
@@ -2388,11 +2391,7 @@ void V8Emitter::marshalInputArgs(Node *n, ParmList *parms, Wrapper *wrapper, Mar
       Exit(EXIT_FAILURE);
     }
 
-    // numinputs=0 typemaps are emitted by the legacy code in
-    // emit_attach_parmmaps() in emit.cxx, check the comment there
-    // All language backends work around this
-    if (!checkAttribute(p, "tmap:in:numinputs", "0"))
-      tm = emitInputTypemap(n, p, wrapper, arg);
+    tm = emitInputTypemap(n, p, wrapper, arg);
     Delete(arg);
 
     if (tm) {

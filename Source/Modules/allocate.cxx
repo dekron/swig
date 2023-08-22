@@ -8,7 +8,12 @@
  *
  * allocate.cxx
  *
- * This module tries to figure out which classes and structures support
+ * This module also has two main purposes modifying the parse tree.
+ *
+ * First, it is responsible for adding in using declarations from base class
+ * members into the parse tree.
+ *
+ * Second, after each class declaration, it analyses if the class/struct supports
  * default constructors and destructors in C++.   There are several rules that
  * define this behavior including pure abstract methods, private sections,
  * and non-default constructors in base classes.  See the ARM or
@@ -17,9 +22,6 @@
  * Once the analysis is complete, the non-explicit/implied default constructors
  * and destructors are added to the parse tree. Implied copy constructors are
  * added too if requested via the copyctor feature.
- *
- * This module also is responsible for adding in using declarations from base
- * class members into the parse tree.
  * ----------------------------------------------------------------------------- */
 
 #include "swigmod.h"
@@ -37,7 +39,7 @@ void Wrapper_virtual_elimination_mode_set(int flag) {
 
 extern "C" {
   static String *search_decl = 0;	/* Declarator being searched */
-  static int check_implemented(Node *n) {
+  static Node *check_implemented(Node *n) {
     String *decl;
     if (!n)
        return 0;
@@ -51,7 +53,7 @@ extern "C" {
 	    if (!GetFlag(n, "abstract")) {
 	      Delete(decl1);
 	      Delete(decl2);
-	      return 1;
+	      return n;
 	    }
 	  }
 	  Delete(decl1);
@@ -533,6 +535,136 @@ class Allocate:public Dispatcher {
     }
   }
 
+/* -----------------------------------------------------------------------------
+ * clone_member_for_using_declaration()
+ *
+ * Create a new member (constructor or method) by copying it from member c, ready
+ * for adding as a child to the using declaration node n.
+ * ----------------------------------------------------------------------------- */
+
+  Node *clone_member_for_using_declaration(Node *c, Node *n) {
+    Node *parent = parentNode(n);
+    String *decl = Getattr(c, "decl");
+    String *symname = Getattr(n, "sym:name");
+    int match = 0;
+
+    Node *over = Getattr(n, "sym:overloaded");
+    while (over) {
+      String *odecl = Getattr(over, "decl");
+      if (Cmp(decl, odecl) == 0) {
+	match = 1;
+	break;
+      }
+      over = Getattr(over, "sym:nextSibling");
+    }
+
+    if (match) {
+      /* Don't generate a method if the method is overridden in this class,
+       * for example don't generate another m(bool) should there be a Base::m(bool) :
+       * struct Derived : Base {
+       *   void m(bool);
+       *   using Base::m;
+       * };
+       */
+      return 0;
+    }
+
+    Node *nn = copyNode(c);
+    Setfile(nn, Getfile(n));
+    Setline(nn, Getline(n));
+    if (!Getattr(nn, "sym:name"))
+      Setattr(nn, "sym:name", symname);
+    Symtab *st = Getattr(n, "sym:symtab");
+    assert(st);
+    Setattr(nn, "sym:symtab", st);
+    // The real parent is the "using" declaration node, but subsequent code generally handles
+    // and expects a class member to point to the parent class node
+    Setattr(nn, "parentNode", parent);
+
+    if (Equal(nodeType(c), "constructor")) {
+      Setattr(nn, "name", Getattr(n, "name"));
+      Setattr(nn, "sym:name", Getattr(n, "sym:name"));
+      // Note that the added constructor's access is the same as that of
+      // the base class' constructor not of the using declaration.
+      // It has already been set correctly and should not be changed.
+    } else {
+      // Access might be different from the method in the base class
+      Delattr(nn, "access");
+      Setattr(nn, "access", Getattr(n, "access"));
+    }
+
+    if (!GetFlag(nn, "feature:ignore")) {
+      ParmList *parms = CopyParmList(Getattr(c, "parms"));
+      int is_pointer = SwigType_ispointer_return(Getattr(nn, "decl"));
+      int is_void = checkAttribute(nn, "type", "void") && !is_pointer;
+      Setattr(nn, "parms", parms);
+      Delete(parms);
+      if (Getattr(n, "feature:extend")) {
+	String *ucode = is_void ? NewStringf("{ self->%s(", Getattr(n, "uname")) : NewStringf("{ return self->%s(", Getattr(n, "uname"));
+
+	for (ParmList *p = parms; p;) {
+	  Append(ucode, Getattr(p, "name"));
+	  p = nextSibling(p);
+	  if (p)
+	    Append(ucode, ",");
+	}
+	Append(ucode, "); }");
+	Setattr(nn, "code", ucode);
+	Delete(ucode);
+      }
+      ParmList *throw_parm_list = Getattr(c, "throws");
+      if (throw_parm_list)
+	Setattr(nn, "throws", CopyParmList(throw_parm_list));
+    } else {
+      Delete(nn);
+      nn = 0;
+    }
+    return nn;
+  }
+
+/* -----------------------------------------------------------------------------
+ * add_member_for_using_declaration()
+ *
+ * Add a new member (constructor or method) by copying it from member c.
+ * Add it into the linked list of members under the using declaration n (ccount,
+ * unodes and last_unodes are used for this).
+ * ----------------------------------------------------------------------------- */
+
+  void add_member_for_using_declaration(Node *c, Node *n, int &ccount, Node *&unodes, Node *&last_unodes) {
+    if (!(Swig_storage_isstatic(c)
+	  || checkAttribute(c, "storage", "typedef")
+	  || Strstr(Getattr(c, "storage"), "friend")
+	  || (Getattr(c, "feature:extend") && !Getattr(c, "code"))
+	  || GetFlag(c, "feature:ignore"))) {
+
+      String *symname = Getattr(n, "sym:name");
+      String *csymname = Getattr(c, "sym:name");
+      Node *parent = parentNode(n);
+      bool using_inherited_constructor_symname_okay = Equal(nodeType(c), "constructor") && Equal(symname, Getattr(parent, "sym:name"));
+      if (!csymname || Equal(csymname, symname) || using_inherited_constructor_symname_okay) {
+	Node *nn = clone_member_for_using_declaration(c, n);
+	if (nn) {
+	  ccount++;
+	  if (!last_unodes) {
+	    last_unodes = nn;
+	    unodes = nn;
+	  } else {
+	    Setattr(nn, "previousSibling", last_unodes);
+	    Setattr(last_unodes, "nextSibling", nn);
+	    Setattr(nn, "sym:previousSibling", last_unodes);
+	    Setattr(last_unodes, "sym:nextSibling", nn);
+	    Setattr(nn, "sym:overloaded", unodes);
+	    Setattr(unodes, "sym:overloaded", unodes);
+	    last_unodes = nn;
+	  }
+	}
+      } else {
+	Swig_warning(WARN_LANG_USING_NAME_DIFFERENT, Getfile(n), Getline(n), "Using declaration %s, with name '%s', is not actually using\n", SwigType_namestr(Getattr(n, "uname")), symname);
+	Swig_warning(WARN_LANG_USING_NAME_DIFFERENT, Getfile(c), Getline(c), "the method from %s, with name '%s', as the names are different.\n", Swig_name_decl(c), csymname);
+      }
+    }
+  }
+
 public:
 Allocate():
   inclass(NULL), extendmode(0) {
@@ -579,8 +711,10 @@ Allocate():
       Setattr(n, "allocate:default_destructor", "1");
     }
 
-    if (Getattr(n, "allocate:visit"))
+    if (Getattr(n, "allocate:visit")) {
+      Swig_symbol_setscope(symtab);
       return SWIG_OK;
+    }
     Setattr(n, "allocate:visit", "1");
 
     /* Always visit base classes first */
@@ -818,120 +952,44 @@ Allocate():
       } else if (Equal(nodeType(ns), "constructor") && !GetFlag(n, "usingctor")) {
 	Swig_warning(WARN_PARSE_USING_CONSTRUCTOR, Getfile(n), Getline(n), "Using declaration '%s' for inheriting constructors uses base '%s' which is not an immediate base of '%s'.\n", SwigType_namestr(Getattr(n, "uname")), SwigType_namestr(Getattr(ns, "name")), SwigType_namestr(Getattr(parentNode(n), "name")));
       } else {
-	String *ntype = nodeType(ns);
-	if (Equal(ntype, "cdecl") || Equal(ntype, "constructor")) {
-	  if (!checkAttribute(ns, "storage", "typedef")) {
-	    /* A normal C declaration or constructor declaration
-	     * Now add a new class member top the parse tree (copied from the base class member pointed to by the using declaration) */
-	    if ((inclass) && (!GetFlag(n, "feature:ignore")) && (Getattr(n, "sym:name"))) {
+	if (inclass && !GetFlag(n, "feature:ignore") && Getattr(n, "sym:name")) {
+	  {
+	    String *ntype = nodeType(ns);
+	    if (Equal(ntype, "cdecl") || Equal(ntype, "constructor") || Equal(ntype, "template")) {
+	      /* Add a new class member to the parse tree (copy it from the base class member pointed to by the using declaration in node n) */
 	      Node *c = ns;
 	      Node *unodes = 0, *last_unodes = 0;
 	      int ccount = 0;
-	      String *symname = Getattr(n, "sym:name");
-	      Node *parent = parentNode(n);
 
 	      while (c) {
-		if (Strcmp(nodeType(c), ntype) == 0) {
-		  if (!(Swig_storage_isstatic(c)
-			|| checkAttribute(c, "storage", "typedef")
-			|| Strstr(Getattr(c, "storage"), "friend")
-			|| (Getattr(c, "feature:extend") && !Getattr(c, "code"))
-			|| GetFlag(c, "feature:ignore"))) {
-
-		    String *csymname = Getattr(c, "sym:name");
-		    bool using_inherited_constructor_symname_okay = Equal(nodeType(c), "constructor") && Equal(symname, Getattr(parent, "sym:name"));
-		    if (!csymname || Equal(csymname, symname) || using_inherited_constructor_symname_okay) {
-		      String *decl = Getattr(c, "decl");
-		      int match = 0;
-
-		      Node *over = Getattr(n, "sym:overloaded");
-		      while (over) {
-			String *odecl = Getattr(over, "decl");
-			if (Cmp(decl, odecl) == 0) {
-			  match = 1;
-			  break;
-			}
-			over = Getattr(over, "sym:nextSibling");
+		String *cnodetype = nodeType(c);
+		if (Equal(cnodetype, "cdecl")) {
+		  add_member_for_using_declaration(c, n, ccount, unodes, last_unodes);
+		} else if (Equal(cnodetype, "constructor")) {
+		  add_member_for_using_declaration(c, n, ccount, unodes, last_unodes);
+		} else if (Equal(cnodetype, "template")) {
+		  // A templated member (in a non-template class or in a template class that where the member has a separate template declaration)
+		  // Find the template instantiations in the using declaration (base class)
+		  for (Node *member = ns; member; member = nextSibling(member)) {
+		    /* Constructors have already been handled, only add member functions
+		     * This adds an implicit template instantiation and is a bit unusual as SWIG requires explicit %template for other template instantiations.
+		     * However, of note, is that there is no valid C++ syntax for a template instantiation to introduce a name via a using declaration...
+		     *
+		     *   struct Base { template <typename T> void template_method(T, T) {} };
+		     *   struct Derived : Base { using Base::template_method; };
+		     *   %template()   Base::template_method<int>;              // SWIG template instantiation
+		     *   template void Base::template_method<int>(int, int);    // C++ template instantiation
+		     *   template void Derived::template_method<int>(int, int); // Not valid C++
+		    */
+		    if (Getattr(member, "template") == ns && checkAttribute(ns, "templatetype", "cdecl")) {
+		      if (!GetFlag(member, "feature:ignore") && !Getattr(member, "error")) {
+			add_member_for_using_declaration(member, n, ccount, unodes, last_unodes);
 		      }
-
-		      if (match) {
-			/* Don't generate a method if the method is overridden in this class,
-			 * for example don't generate another m(bool) should there be a Base::m(bool) :
-			 * struct Derived : Base {
-			 *   void m(bool);
-			 *   using Base::m;
-			 * };
-			 */
-			c = Getattr(c, "csym:nextSibling");
-			continue;
-		      }
-
-		      Node *nn = copyNode(c);
-		      Setfile(nn, Getfile(n));
-		      Setline(nn, Getline(n));
-		      if (!Getattr(nn, "sym:name"))
-			Setattr(nn, "sym:name", symname);
-		      Symtab *st = Getattr(n, "sym:symtab");
-		      assert(st);
-		      Setattr(nn, "sym:symtab", st);
-		      // The real parent is the "using" declaration node, but subsequent code generally handles
-		      // and expects a class member to point to the parent class node
-		      Setattr(nn, "parentNode", parent);
-
-		      if (Equal(ntype, "constructor")) {
-			Setattr(nn, "name", Getattr(n, "name"));
-			Setattr(nn, "sym:name", Getattr(n, "sym:name"));
-			// Note that the added constructor's access is the same as that of
-			// the base class' constructor not of the using declaration.
-			// It has already been set correctly and should not be changed.
-		      } else {
-			// Access might be different from the method in the base class
-			Delattr(nn, "access");
-			Setattr(nn, "access", Getattr(n, "access"));
-		      }
-
-		      if (!GetFlag(nn, "feature:ignore")) {
-			ParmList *parms = CopyParmList(Getattr(c, "parms"));
-			int is_pointer = SwigType_ispointer_return(Getattr(nn, "decl"));
-			int is_void = checkAttribute(nn, "type", "void") && !is_pointer;
-			Setattr(nn, "parms", parms);
-			Delete(parms);
-			if (Getattr(n, "feature:extend")) {
-			  String *ucode = is_void ? NewStringf("{ self->%s(", Getattr(n, "uname")) : NewStringf("{ return self->%s(", Getattr(n, "uname"));
-
-			  for (ParmList *p = parms; p;) {
-			    Append(ucode, Getattr(p, "name"));
-			    p = nextSibling(p);
-			    if (p)
-			      Append(ucode, ",");
-			  }
-			  Append(ucode, "); }");
-			  Setattr(nn, "code", ucode);
-			  Delete(ucode);
-			}
-			ParmList *throw_parm_list = Getattr(c, "throws");
-			if (throw_parm_list)
-			  Setattr(nn, "throws", CopyParmList(throw_parm_list));
-			ccount++;
-			if (!last_unodes) {
-			  last_unodes = nn;
-			  unodes = nn;
-			} else {
-			  Setattr(nn, "previousSibling", last_unodes);
-			  Setattr(last_unodes, "nextSibling", nn);
-			  Setattr(nn, "sym:previousSibling", last_unodes);
-			  Setattr(last_unodes, "sym:nextSibling", nn);
-			  Setattr(nn, "sym:overloaded", unodes);
-			  Setattr(unodes, "sym:overloaded", unodes);
-			  last_unodes = nn;
-			}
-		      } else {
-			Delete(nn);
-		      }
-		    } else {
-		      Swig_warning(WARN_LANG_USING_NAME_DIFFERENT, Getfile(n), Getline(n), "Using declaration %s, with name '%s', is not actually using\n", SwigType_namestr(Getattr(n, "uname")), symname);
-		      Swig_warning(WARN_LANG_USING_NAME_DIFFERENT, Getfile(c), Getline(c), "the method from %s, with name '%s', as the names are different.\n", Swig_name_decl(c), csymname);
 		    }
+		  }
+		} else if (Equal(cnodetype, "using")) {
+		  for (Node *member = firstChild(c); member; member = nextSibling(member)) {
+		    add_member_for_using_declaration(member, n, ccount, unodes, last_unodes);
 		  }
 		}
 		c = Getattr(c, "csym:nextSibling");

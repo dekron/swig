@@ -467,7 +467,7 @@ static Parm *nonvoid_parms(Parm *p) {
  * Returns the alternative value type needed in C++ for class value
  * types. When swig is not sure about using a plain $ltype value,
  * since the class doesn't have a default constructor, or it can't be
- * assigned, you will get back 'SwigValueWrapper<type >'.
+ * assigned, you will get back 'SwigValueWrapper<(type)>'.
  *
  * ----------------------------------------------------------------------------- */
 
@@ -2252,7 +2252,7 @@ int Language::classDirector(Node *n) {
   Node *ni;
   String *using_protected_members_code = NewString("");
   for (ni = Getattr(n, "firstChild"); ni; ni = nextSibling(ni)) {
-    Node *nodeType = nodeType(ni);
+    String *nodeType = nodeType(ni);
     if (Cmp(nodeType, "destructor") == 0 && GetFlag(ni, "final")) {
       String *classtype = Getattr(n, "classtype");
       SWIG_WARN_NODE_BEGIN(ni);

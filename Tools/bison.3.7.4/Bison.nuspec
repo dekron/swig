@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd">
+  <metadata>
+    <id>Bison</id>
+    <version>3.7.4</version>
+    <authors>geographika</authors>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <license type="file">COPYING.txt</license>
+    <licenseUrl>https://aka.ms/deprecateLicenseUrl</licenseUrl>
+    <readme>README.md</readme>
+    <projectUrl>https://www.gnu.org/software/bison/</projectUrl>
+    <description>GNU Bison (parser generator)</description>
+    <tags>Native, native, bison, parser, LALR, GNU</tags>
+  </metadata>
+</package>

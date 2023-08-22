@@ -19,6 +19,7 @@ ifneq (jsc, $(ENGINE))
 SWIGOPT += -DV8_VERSION=$(JSV8_VERSION)
 endif
 
+
 check: build
 	$(MAKE) -f $(EXAMPLES_TOP)/Makefile SRCDIR='$(SRCDIR)' TARGET='$(TARGET)' javascript_run
 

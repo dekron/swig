@@ -133,6 +133,7 @@ $jsmangledname_templ<SWIG_OBJ_WRAP>::$jsmangledname_templ(bool, const Napi::Call
  *   - $jscode:           code part of wrapper
  *   - $jsargcount:       number of arguments
  *   - $jsargrequired:    minimum number of arguments
+ *   - $jsmangledname:    mangled class name
  *   - $jsmangledtype:    mangled type of class
  * ----------------------------------------------------------------------------- */
 %fragment("js_overloaded_ctor", "templates") %{
@@ -241,7 +242,7 @@ ${classname_mangled}_templ<SWIG_OBJ_WRAP>::~${classname_mangled}_templ() {
   auto arg1 = reinterpret_cast<$jstype>(this->self);
   if (this->owned && arg1) {
     ${destructor_action}
-    this->self = nullptr;
+    this->self = SWIG_NULLPTR;
   }
 }
 %}
@@ -250,6 +251,9 @@ ${classname_mangled}_templ<SWIG_OBJ_WRAP>::~${classname_mangled}_templ() {
  * js_global_getter:  template for global getter function wrappers
  *   - $jswrapper:      wrapper function name
  *   - $jslocals:       locals part of wrapper
+ *   - $jsinput:        input part of wrapper
+ *   - $jsguard:        locking declaration
+ *   - $jslock:         locking
  *   - $jscode:         code part of wrapper
  * ----------------------------------------------------------------------------- */
 %fragment("js_global_getter", "templates")
@@ -259,7 +263,12 @@ Napi::Value $jswrapper(const Napi::CallbackInfo &info) {
   Napi::Env env = info.Env();
   Napi::Value jsresult;
   $jslocals
-  $jscode
+  $jsguard
+  $jsinput
+  $jslock
+  $jsaction
+  $jsoutput
+  $jscleanup
   return jsresult;
 
   goto fail;
@@ -273,6 +282,9 @@ fail:
  * js_global_setter:  template for global setter function wrappers
  *   - $jswrapper:      wrapper function name
  *   - $jslocals:       locals part of wrapper
+ *   - $jsinput:        input part of wrapper
+ *   - $jsguard:        locking declaration
+ *   - $jslock:         locking
  *   - $jscode:         code part of wrapper
  * ----------------------------------------------------------------------------- */
 %fragment("js_global_setter", "templates")
@@ -283,7 +295,11 @@ void $jswrapper(const Napi::CallbackInfo &info) {
   Napi::Value value = info.Length() > 0 ? info[0] : Napi::Value();
   Napi::Value jsresult;
   $jslocals
-  $jscode
+  $jsguard
+  $jsinput
+  $jslock
+  $jsaction
+  $jscleanup
   return;
 
   goto fail;
@@ -314,11 +330,18 @@ fail:
 
 /* -----------------------------------------------------------------------------
  * js_global_function:  template for function wrappers
- *   - $jswrapper:     wrapper function name
- *   - $jslocals:      locals part of wrapper
- *   - $jsargcount:    number of arguments
- *   - $jsargrequired: minimum number of arguments
- *   - $jscode:        code part of wrapper
+ *   - $jswrapper:      wrapper function name
+ *   - $jslocals:       locals part of wrapper
+ *   - $jsargcount:     number of arguments
+ *   - $jsargrequired:  minimum number of arguments
+ *   - $jslocals:       locals part of wrapper
+ *   - $jsinput:        input part of wrapper
+ *   - $jschecks:       check typemaps
+ *   - $jsguard:        locking declaration
+ *   - $jslock:         locking
+ *   - $jsaction:       action part of wrapper
+ *   - $joutput:        output part of wrapper
+ *   - $jscleanup:      cleanup part of wrapper
  * ----------------------------------------------------------------------------- */
 %fragment("js_global_function", "templates")
 %{
@@ -327,13 +350,50 @@ Napi::Value $jswrapper(const Napi::CallbackInfo &info) {
   Napi::Env env = info.Env();
   Napi::Value jsresult;
   $jslocals
+  $jsguard
   if(static_cast<int>(info.Length()) < $jsargrequired || static_cast<int>(info.Length()) > $jsargcount) {
     SWIG_Error(SWIG_ERROR, "Illegal number of arguments for $jswrapper.");
   }
 
-  $jscode
+  $jsinput
+  $jschecks
+  $jslock
+  $jsaction
+  $jsoutput
+  $jscleanup
   return jsresult;
 
+  goto fail;
+fail:
+  return Napi::Value();
+}
+%}
+
+
+/* -----------------------------------------------------------------------------
+ * js_global_function_async:  template for async function wrappers
+ *   - $jswrapper:      wrapper function name
+ *   - $jsmangledname:  mangled class name
+ *   - $jslocals:       locals part of wrapper
+ *   - $jsasyncworker:  local async worker class
+ *   - $jsargcount:     number of arguments
+ *   - $jsargrequired:  minimum number of arguments
+ * ----------------------------------------------------------------------------- */
+%fragment("js_global_function_async", "templates")
+%{
+// js_global_function_async
+Napi::Value $jswrapper(const Napi::CallbackInfo &info) {
+  $jsasyncworker
+  Napi::Env env = info.Env();
+  $jsmangledname_$jswrapper_Tasklet *context = SWIG_NULLPTR;
+  SWIG_NAPI_AsyncWorker *worker = SWIG_NULLPTR;
+  if(static_cast<int>(info.Length()) < $jsargrequired || static_cast<int>(info.Length()) > $jsargcount) {
+    SWIG_Error(SWIG_ERROR, "Illegal number of arguments for $jswrapper.");
+  }
+  context = new $jsmangledname_$jswrapper_Tasklet(env);
+  worker = new SWIG_NAPI_AsyncWorker(
+    env, "SWIG_$jswrapper_Async_Worker", context);
+  return worker->Run(info);
   goto fail;
 fail:
   return Napi::Value();
@@ -389,6 +449,9 @@ fail:
  *   - $jsmangledname:  mangled class name
  *   - $jswrapper:      wrapper function name
  *   - $jslocals:       locals part of wrapper
+ *   - $jsinput:        input part of wrapper
+ *   - $jsguard:        locking declaration
+ *   - $jslock:         locking
  *   - $jscode:         code part of wrapper
  * ----------------------------------------------------------------------------- */
 %fragment("js_getter", "templates")
@@ -399,7 +462,12 @@ Napi::Value $jsmangledname_templ<SWIG_OBJ_WRAP>::$jswrapper(const Napi::Callback
   Napi::Env env = info.Env();
   Napi::Value jsresult;
   $jslocals
-  $jscode
+  $jsguard
+  $jsinput
+  $jslock
+  $jsaction
+  $jsoutput
+  $jscleanup
   return jsresult;
 
   goto fail;
@@ -414,6 +482,9 @@ fail:
  *   - $jsmangledname:  mangled class name
  *   - $jswrapper:      wrapper function name
  *   - $jslocals:       locals part of wrapper
+ *   - $jsinput:        input part of wrapper
+ *   - $jsguard:        locking declaration
+ *   - $jslock:         locking
  *   - $jscode:         code part of wrapper
  * ----------------------------------------------------------------------------- */
 %fragment("js_setter", "templates")
@@ -424,7 +495,11 @@ void $jsmangledname_templ<SWIG_OBJ_WRAP>::$jswrapper(const Napi::CallbackInfo &i
   Napi::Env env = info.Env();
   Napi::Value jsresult;
   $jslocals
-  $jscode
+  $jsguard
+  $jsinput
+  $jslock
+  $jsaction
+  $jscleanup
   return;
 
   goto fail;
@@ -438,10 +513,16 @@ fail:
  * js_function:  template for function wrappers
  *   - $jsmangledname:  mangled class name
  *   - $jswrapper:      wrapper function name
- *   - $jsargcount:     minimum number of arguments
+ *   - $jsargcount:     maximum number of arguments
  *   - $jsargrequired:  minimum number of arguments
  *   - $jslocals:       locals part of wrapper
- *   - $jscode:         code part of wrapper
+ *   - $jsinput:        input part of wrapper
+ *   - $jschecks:       check typemaps
+ *   - $jsguard:        locking declaration
+ *   - $jslock:         locking
+ *   - $jsaction:       action part of wrapper
+ *   - $joutput:        output part of wrapper
+ *   - $jscleanup:      cleanup part of wrapper
  * ----------------------------------------------------------------------------- */
 %fragment("js_function", "templates")
 %{
@@ -451,13 +532,50 @@ Napi::Value $jsmangledname_templ<SWIG_OBJ_WRAP>::$jswrapper(const Napi::Callback
   Napi::Env env = info.Env();
   Napi::Value jsresult;
   $jslocals
+  $jsguard
   if(static_cast<int>(info.Length()) < $jsargrequired || static_cast<int>(info.Length()) > $jsargcount) {
     SWIG_Error(SWIG_ERROR, "Illegal number of arguments for $jswrapper.");
   }
 
-  $jscode
+  $jsinput
+  $jschecks
+  $jslock
+  $jsaction
+  $jsoutput
+  $jscleanup
   return jsresult;
 
+  goto fail;
+fail:
+  return Napi::Value();
+}
+%}
+
+
+/* -----------------------------------------------------------------------------
+ * js_function_async:  template for async function wrappers
+ *   - $jsmangledname:  mangled class name
+ *   - $jswrapper:      wrapper function name
+ *   - $jsasyncworker:  local async worker class
+ *   - $jsargcount:     maximum number of arguments
+ *   - $jsargrequired:  minimum number of arguments
+ * ----------------------------------------------------------------------------- */
+%fragment("js_function_async", "templates")
+%{
+// js_function_async
+template <typename SWIG_OBJ_WRAP>
+Napi::Value $jsmangledname_templ<SWIG_OBJ_WRAP>::$jswrapper(const Napi::CallbackInfo &info) {
+  $jsasyncworker
+  Napi::Env env = info.Env();
+  $jsmangledname_$jswrapper_Tasklet *context = SWIG_NULLPTR;
+  SWIG_NAPI_AsyncWorker *worker = SWIG_NULLPTR;
+  if(static_cast<int>(info.Length()) < $jsargrequired || static_cast<int>(info.Length()) > $jsargcount) {
+    SWIG_Error(SWIG_ERROR, "Illegal number of arguments for $jswrapper.");
+  }
+  context = new $jsmangledname_$jswrapper_Tasklet(env);
+  worker = new SWIG_NAPI_AsyncWorker(
+    env, "SWIG_$jsmangledname_$jswrapper_Async_Worker", context);
+  return worker->Run(info);
   goto fail;
 fail:
   return Napi::Value();
@@ -481,7 +599,6 @@ Napi::Value $jsmangledname_templ<SWIG_OBJ_WRAP>::$jswrapper(const Napi::Callback
   Napi::Env env = info.Env();
   Napi::Value jsresult;
   $jscode
-
   SWIG_Error(SWIG_ERROR, "Illegal arguments for function $jsname.");
 
   goto fail;
@@ -493,9 +610,14 @@ fail:
 
 /* -----------------------------------------------------------------------------
  * js_overloaded_function:  template for a overloaded function
- *   - $jswrapper:  wrapper function name
- *   - $jslocals:   locals part of wrapper
- *   - $jscode:     code part of wrapper
+ *   - $jsmangledname: class name
+ *   - $jswrapper:     wrapper function name
+ *   - $jslocals:      locals part of wrapper
+ *   - $jsinput:        input part of wrapper
+ *   - $jschecks:       check typemaps
+ *   - $jsguard:       locking declaration
+ *   - $jslock:        locking
+ *   - $jsaction:      code part of wrapper
  * ----------------------------------------------------------------------------- */
 %fragment ("js_overloaded_function", "templates")
 %{
@@ -505,9 +627,44 @@ Napi::Value $jsmangledname_templ<SWIG_OBJ_WRAP>::$jswrapper(const Napi::Callback
   Napi::Env env = info.Env();
   Napi::Value jsresult;
   $jslocals
-  $jscode
+  $jsguard
+  $jsinput
+  $jschecks
+  $jslock
+  $jsaction
+  $jsoutput
+  $jscleanup
   return jsresult;
 
+  goto fail;
+fail:
+  return Napi::Value();
+}
+%}
+
+
+/* -----------------------------------------------------------------------------
+ * js_overloaded_function_async:  template for overloaded async function wrappers
+ *   - $jsmangledname:  class name
+ *   - $jswrapper:      wrapper function name
+ *   - $jsasyncworker:  local async worker class
+ * ----------------------------------------------------------------------------- */
+%fragment("js_overloaded_function_async", "templates")
+%{
+// js_overloaded_function_async
+template <typename SWIG_OBJ_WRAP>
+Napi::Value $jsmangledname_templ<SWIG_OBJ_WRAP>::$jswrapper(const Napi::CallbackInfo &info) {
+  $jsasyncworker
+  Napi::Env env = info.Env();
+  $jsmangledname_$jswrapper_Tasklet *context = SWIG_NULLPTR;
+  SWIG_NAPI_AsyncWorker *worker = SWIG_NULLPTR;
+  if(static_cast<int>(info.Length()) < $jsargrequired || static_cast<int>(info.Length()) > $jsargcount) {
+    SWIG_Error(SWIG_ERROR, "Illegal number of arguments for $jswrapper.");
+  }
+  context = new $jsmangledname_$jswrapper_Tasklet(env);
+  worker = new SWIG_NAPI_AsyncWorker(
+    env, "SWIG_$jsmangledname_$jswrapper_Async_Worker", context);
+  return worker->Run(info);
   goto fail;
 fail:
   return Napi::Value();
@@ -519,7 +676,12 @@ fail:
  * js_global_overloaded_function:  template for a global overloaded function
  *   - $jswrapper:      wrapper function name
  *   - $jslocals:       locals part of wrapper
- *   - $jscode:         code part of wrapper
+ *   - $jsinput:        input part of wrapper
+ *   - $jschecks:       check typemaps
+ *   - $jsguard:        locking
+ *   - $jsaction:       action part of wrapper
+ *   - $joutput:        output part of wrapper
+ *   - $jscleanup:      cleanup part of wrapper
  * ----------------------------------------------------------------------------- */
 %fragment ("js_global_overloaded_function", "templates")
 %{
@@ -528,13 +690,149 @@ Napi::Value $jswrapper(const Napi::CallbackInfo &info) {
   Napi::Env env = info.Env();
   Napi::Value jsresult;
   $jslocals
-  $jscode
+  $jsguard
+  $jsinput
+  $jschecks
+  $jslock
+  $jsaction
+  $jsoutput
+  $jscleanup
   return jsresult;
 
   goto fail;
 fail:
   return Napi::Value();
 }
+%}
+
+
+/* -----------------------------------------------------------------------------
+ * js_global_overloaded_function_async:  template for global overloaded async function wrappers
+ *   - $jswrapper:      wrapper function name
+ *   - $jsasyncworker:  local async worker class
+ * ----------------------------------------------------------------------------- */
+%fragment("js_global_overloaded_function_async", "templates")
+%{
+// js_global_overloaded_function_async
+Napi::Value $jswrapper(const Napi::CallbackInfo &info) {
+  $jsasyncworker
+  Napi::Env env = info.Env();
+  $jsmangledname_$jswrapper_Tasklet *context = SWIG_NULLPTR;
+  SWIG_NAPI_AsyncWorker *worker = SWIG_NULLPTR;
+  if(static_cast<int>(info.Length()) < $jsargrequired || static_cast<int>(info.Length()) > $jsargcount) {
+    SWIG_Error(SWIG_ERROR, "Illegal number of arguments for $jswrapper.");
+  }
+  context = new $jsmangledname_$jswrapper_Tasklet(env);
+  worker = new SWIG_NAPI_AsyncWorker(
+    env, "SWIG_$jswrapper_Async_Worker", context);
+  return worker->Run(info);
+  goto fail;
+fail:
+  return Napi::Value();
+}
+%}
+
+
+/* -----------------------------------------------------------------------------
+ * js_local_locks_list:  template for the locks list local variable
+ * ----------------------------------------------------------------------------- */
+%fragment("js_local_locks_list", "templates")
+%{
+  // js_locks_list
+  SWIG_Locks_List SWIG_locks;
+%}
+
+
+/* -----------------------------------------------------------------------------
+ * js_guard:  template for creating a guard variable
+ * ----------------------------------------------------------------------------- */
+%fragment("js_guard", "templates")
+%{
+  // js_guard
+  SWIG_Guard SWIG_guard(SWIG_locks);
+%}
+
+
+/* -----------------------------------------------------------------------------
+ * js_lock:  template for locking the guard variable
+ * ----------------------------------------------------------------------------- */
+%fragment("js_lock", "templates")
+%{
+  // js_lock
+  SWIG_guard.lock();
+%}
+
+
+/* -----------------------------------------------------------------------------
+ * js_async_worker_local_class:  template for the local async worker class in async wrappers
+ *   - $jswrapper:      wrapper function name
+ *   - $jslocals:       locals part of wrapper
+ *   - $jsargcount:     number of arguments
+ *   - $jsargrequired:  minimum number of arguments
+ *   - $jslocals:       locals part of wrapper
+ *   - $jsinput:        input part of wrapper
+ *   - $jschecks:       check typemaps
+ *   - $jsguard:        locking declaration
+ *   - $jslock:         locking
+ *   - $jsaction:       action part of wrapper
+ *   - $joutput:        output part of wrapper
+ *   - $jscleanup:      cleanup part of wrapper
+ * ----------------------------------------------------------------------------- */
+%fragment("js_async_worker_local_class", "templates")
+%{
+  // js_async_worker_local_class
+  class $jsmangledname_$jswrapper_Tasklet : public SWIG_NAPI_AsyncContext {
+    Napi::Env env;
+    $jslocals
+  public:
+    $jsmangledname_$jswrapper_Tasklet(Napi::Env _env)
+      : SWIG_NAPI_AsyncContext(_env), env(_env) {}
+
+    virtual void SWIG_NAPI_Execute() override {
+      // This runs the action code in a worker thread and V8 is not accessible
+      Napi::Env env(SWIG_NULLPTR);
+      $jsguard
+      $jslock
+#define SWIG_NAPI_Raise SWIG_NAPI_AsyncThrow
+      $jsaction
+#undef SWIG_NAPI_Raise
+      goto fail;
+    fail:
+      return;
+    }
+
+    virtual void SWIG_NAPI_Resolve() override {
+      // Back in the main thread with V8 access
+      Napi::Value jsresult;
+      $jsoutput
+      if (!SWIG_NAPI_Cleanup()) goto fail;
+      SWIG_NAPI_deferred_finalized = true;
+      SWIG_NAPI_deferred.Resolve(jsresult);
+      goto fail;
+    fail:
+      return;
+    }
+
+    virtual bool SWIG_NAPI_Cleanup() override {
+      $jscleanup
+      SWIG_NAPI_deferred_finalized = true;
+      return true;
+      goto fail;
+    fail:
+      return false;
+    }
+
+    virtual Status SWIG_NAPI_Init(const Napi::CallbackInfo &info) override {
+      $jsinput
+#define SWIG_NAPI_Raise SWIG_NAPI_Reject
+      $jschecks
+#undef SWIG_NAPI_Raise
+      return Status::OK;
+      goto fail;
+    fail:
+      return Status::THROW;
+    }
+  };
 %}
 
 
@@ -644,19 +942,7 @@ fail:
 %fragment("jsnapi_class_epilogue_template", "templates")
 %{
   // jsnapi_class_epilogue_template
-  static void JS_veto_set_static_variable(const Napi::CallbackInfo &, const Napi::Value &);
-  void JS_veto_set_variable(const Napi::CallbackInfo &, const Napi::Value &);
 };
-
-template <typename SWIG_OBJ_WRAP>
-void $jsmangledname_templ<SWIG_OBJ_WRAP>::JS_veto_set_static_variable(const Napi::CallbackInfo &info, const Napi::Value &value) {
-  SWIG_NAPI_Raise(info.Env(), "Tried to write read-only variable.");
-}
-
-template <typename SWIG_OBJ_WRAP>
-void $jsmangledname_templ<SWIG_OBJ_WRAP>::JS_veto_set_variable(const Napi::CallbackInfo &info, const Napi::Value &value) {
-  SWIG_NAPI_Raise(info.Env(), "Tried to write read-only variable.");
-}
 %}
 
 
@@ -758,7 +1044,7 @@ void $jsmangledname_inst::GetMembers(
   // jsnapi_registerclass
   Napi::Function $jsmangledname_ctor = $jsmangledname_inst::GetClass(env);
   $jsparent.Set("$jsname", $jsmangledname_ctor);
-  if (SWIGTYPE_$jsmangledtype->clientdata == nullptr) {
+  if (SWIGTYPE_$jsmangledtype->clientdata == SWIG_NULLPTR) {
     SWIGTYPE_$jsmangledtype->clientdata = new size_t($jsclassidx);
   }
   Napi::FunctionReference *$jsmangledname_ctor_ref = new Napi::FunctionReference();
@@ -808,14 +1094,14 @@ void $jsmangledname_inst::GetMembers(
 %}
 
 /* -----------------------------------------------------------------------------
- * jsnapi_member_function_descriptor:  template for a statement that registers a member function.
+ * jsnapi_register_member_function:  template for a statement that registers a member function.
  *   - $jsmangledname:  mangled class name
  *   - $jsname:         name of the function
  *   - $jswrapper:      wrapper of the member function
  * ----------------------------------------------------------------------------- */
 %fragment("jsnapi_register_member_function", "templates")
 %{
-  // jsnapi_member_function_descriptor
+  // jsnapi_register_member_function
   members.erase("$jsname");
   members.insert({"$jsname",
         $jsmangledname_templ::InstanceMethod("$jsname",
